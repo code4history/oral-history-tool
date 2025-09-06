@@ -598,10 +598,12 @@ const formatTime = (seconds: number): string => {
 const initWaveform = async (file: AudioFile) => {
   if (!file.url) return;
   
-  // 既に初期化済みの場合はスキップ
+  // 既存の波形を必ず破棄
   if (waveforms.value.has(file.id)) {
-    console.log(`Waveform already initialized for ${file.id}`);
-    return;
+    console.log(`Destroying existing waveform for ${file.id}`);
+    const existingWaveform = waveforms.value.get(file.id);
+    existingWaveform.destroy();
+    waveforms.value.delete(file.id);
   }
   
   await nextTick();
@@ -612,6 +614,9 @@ const initWaveform = async (file: AudioFile) => {
     return;
   }
   
+  // コンテナの中身をクリア
+  container.innerHTML = '';
+  
   try {
     // コンテナの幅を取得
     const containerWidth = container.offsetWidth || 800;
@@ -619,8 +624,9 @@ const initWaveform = async (file: AudioFile) => {
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
-    // パディング付きの音声データを作成
-    const paddedUrl = await createPaddedAudio(file);
+    // パディング付きの音声データを作成（一時的に無効化）
+    // const paddedUrl = await createPaddedAudio(file);
+    const paddedUrl = null; // パディングを一時的に無効化して問題を切り分け
     
     const wavesurfer = WaveSurfer.create({
       container: container,
@@ -715,6 +721,9 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
   const container = document.querySelector(`#waveform-${file.id}`) as HTMLElement;
   if (!container) return;
   
+  // コンテナの中身をクリア
+  container.innerHTML = '';
+  
   try {
     // コンテナの幅を取得
     const containerWidth = container.offsetWidth || 800;
@@ -722,8 +731,9 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
-    // パディング付きの音声データを作成
-    const paddedUrl = await createPaddedAudio(file);
+    // パディング付きの音声データを作成（一時的に無効化）
+    // const paddedUrl = await createPaddedAudio(file);
+    const paddedUrl = null; // パディングを一時的に無効化
     
     const wavesurfer = WaveSurfer.create({
       container: container,
