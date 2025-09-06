@@ -652,9 +652,8 @@ const initWaveform = async (file: AudioFile) => {
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
-    // パディング付きの音声データを作成（一時的に無効化）
-    // const paddedUrl = await createPaddedAudio(file);
-    const paddedUrl = null; // パディングを一時的に無効化して問題を切り分け
+    // パディング付きの音声データを作成
+    const paddedUrl = await createPaddedAudio(file);
     
     const wavesurfer = WaveSurfer.create({
       container: container,
@@ -928,19 +927,13 @@ const seekToTime = (time: number) => {
 const getGlobalStartTimes = () => {
   const startTimes: number[] = [];
   
-  // 第1音声は常に基準
-  startTimes[0] = 0;
+  // 最小オフセットを見つける（負の値を考慮）
+  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
   
-  // 第2音声以降のオフセットが負の場合、全体を調整
-  for (let i = 1; i < props.audioFiles.length; i++) {
-    const offset = props.audioFiles[i].offset;
-    if (offset < 0) {
-      // 負のオフセットの場合、第1音声をその分遅らせる
-      startTimes[0] = Math.max(startTimes[0], -offset);
-      startTimes[i] = 0;
-    } else {
-      startTimes[i] = offset;
-    }
+  // 各ファイルのグローバル開始時刻を計算
+  for (let i = 0; i < props.audioFiles.length; i++) {
+    // 最小オフセットを基準に正規化
+    startTimes[i] = props.audioFiles[i].offset - minOffset;
   }
   
   return startTimes;
