@@ -582,12 +582,19 @@ const initWaveform = async (file: AudioFile) => {
   
   await nextTick();
   
-  const container = document.querySelector(`#waveform-${file.id}`);
+  const container = document.querySelector(`#waveform-${file.id}`) as HTMLElement;
   if (!container) return;
   
   try {
+    // コンテナの幅を取得
+    const containerWidth = container.offsetWidth || 800;
+    
+    // 0.01秒 = 1ピクセルに設定
+    // minPxPerSecを使用してズームレベルを設定
+    const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
+    
     const wavesurfer = WaveSurfer.create({
-      container: container as HTMLElement,
+      container: container,
       waveColor: '#4CAF50',
       progressColor: '#2196F3',
       cursorColor: '#FF5722',
@@ -595,8 +602,11 @@ const initWaveform = async (file: AudioFile) => {
       normalize: true,
       backend: 'WebAudio',
       interact: false, // 波形自体はクリック不可
-      barWidth: 2,
-      barGap: 1
+      minPxPerSec: minPxPerSec, // 最小ピクセル/秒
+      scrollParent: true, // スクロールを有効化
+      barWidth: 1, // バーの幅を1ピクセルに
+      barGap: 0, // ギャップをなくして継目なく表示
+      barHeight: 1 // バーの高さを正規化
     });
     
     await wavesurfer.load(file.url);
@@ -668,12 +678,18 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
   
   await nextTick();
   
-  const container = document.querySelector(`#waveform-${file.id}`);
+  const container = document.querySelector(`#waveform-${file.id}`) as HTMLElement;
   if (!container) return;
   
   try {
+    // コンテナの幅を取得
+    const containerWidth = container.offsetWidth || 800;
+    
+    // 0.01秒 = 1ピクセルに設定
+    const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
+    
     const wavesurfer = WaveSurfer.create({
-      container: container as HTMLElement,
+      container: container,
       waveColor: waveColor,
       progressColor: progressColor,
       cursorColor: '#FF5722',
@@ -681,8 +697,11 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
       normalize: true,
       backend: 'WebAudio',
       interact: false,
-      barWidth: 2,
-      barGap: 1
+      minPxPerSec: minPxPerSec,
+      scrollParent: true,
+      barWidth: 1,
+      barGap: 0,
+      barHeight: 1
     });
     
     await wavesurfer.load(file.url);
@@ -967,6 +986,8 @@ defineExpose({
 .waveform {
   width: 100%;
   margin-bottom: 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .waveform-sync-controls {
