@@ -7,7 +7,7 @@ export async function findBestOffset(
   audioBuffer1: AudioBuffer,
   audioBuffer2: AudioBuffer,
   maxOffset: number = 30,
-  sampleStep: number = 0.1
+  sampleStep: number = 0.01
 ): Promise<AudioSyncResult> {
   const sampleRate = audioBuffer1.sampleRate;
   const data1 = audioBuffer1.getChannelData(0);

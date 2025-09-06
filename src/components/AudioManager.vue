@@ -218,7 +218,7 @@ const handleFileUpload = async (event: Event) => {
     if (file.type !== 'audio/mpeg') continue;
     
     const audioFile: AudioFile = {
-      id: Date.now().toString() + Math.random(),
+      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name: file.name,
       blob: file, // メモリ上でのみ保持
       arrayBuffer: undefined, // 保存時に変換
@@ -635,37 +635,71 @@ const showWaveformComparison = (index: number) => {
   
   if (showingComparison.value === targetFile.id) {
     showingComparison.value = null;
+    // 波形を再作成して元の色に戻す
+    recreateWaveform(referenceFile);
+    recreateWaveform(targetFile);
     return;
   }
   
   showingComparison.value = targetFile.id;
   
-  // 両方の波形を強調表示
-  const refWaveform = waveforms.value.get(referenceFile.id);
-  const targetWaveform = waveforms.value.get(targetFile.id);
-  
-  if (refWaveform) {
-    refWaveform.setWaveColor('#FF9800');
-    refWaveform.setProgressColor('#FF5722');
-  }
-  
-  if (targetWaveform) {
-    targetWaveform.setWaveColor('#2196F3');
-    targetWaveform.setProgressColor('#1976D2');
-  }
+  // 波形を再作成して色を変更
+  recreateWaveform(referenceFile, '#FF9800', '#FF5722');
+  recreateWaveform(targetFile, '#2196F3', '#1976D2');
   
   // 3秒後に元に戻す
   setTimeout(() => {
-    if (refWaveform) {
-      refWaveform.setWaveColor('#4CAF50');
-      refWaveform.setProgressColor('#2196F3');
+    if (showingComparison.value === targetFile.id) {
+      recreateWaveform(referenceFile);
+      recreateWaveform(targetFile);
+      showingComparison.value = null;
     }
-    if (targetWaveform) {
-      targetWaveform.setWaveColor('#4CAF50');
-      targetWaveform.setProgressColor('#2196F3');
-    }
-    showingComparison.value = null;
   }, 3000);
+};
+
+const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', progressColor: string = '#2196F3') => {
+  if (!file.url) return;
+  
+  // 既存の波形を破棄
+  if (waveforms.value.has(file.id)) {
+    waveforms.value.get(file.id).destroy();
+    waveforms.value.delete(file.id);
+  }
+  
+  await nextTick();
+  
+  const container = document.querySelector(`#waveform-${file.id}`);
+  if (!container) return;
+  
+  try {
+    const wavesurfer = WaveSurfer.create({
+      container: container as HTMLElement,
+      waveColor: waveColor,
+      progressColor: progressColor,
+      cursorColor: '#FF5722',
+      height: 60,
+      normalize: true,
+      backend: 'WebAudio',
+      interact: false,
+      barWidth: 2,
+      barGap: 1
+    });
+    
+    await wavesurfer.load(file.url);
+    waveforms.value.set(file.id, wavesurfer);
+    
+    // 現在の再生位置を反映
+    const audioIndex = props.audioFiles.indexOf(file);
+    const audio = audioRefs.value[audioIndex];
+    if (audio) {
+      const progress = audio.currentTime / audio.duration;
+      if (!isNaN(progress)) {
+        wavesurfer.seekTo(progress);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to recreate waveform:', error);
+  }
 };
 
 const seekToTime = (time: number) => {
