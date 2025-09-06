@@ -330,15 +330,32 @@ const playAll = () => {
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
-    // マージ後の0秒を基準にした再生位置を計算
-    const adjustedOffset = file.offset - minOffset;
-    audio.currentTime = Math.max(0, currentTime.value - adjustedOffset);
+    
+    // グローバル時間軸上でのこのファイルの開始時刻
+    const globalStartTime = file.offset - minOffset;
+    
+    // 現在のグローバル時刻から、このファイルのローカル時刻を計算
+    const localTime = currentTime.value - globalStartTime;
+    
+    // ファイルがまだ開始していない場合は再生しない
+    if (localTime < 0) {
+      audio.pause();
+      audio.currentTime = 0;
+      return;
+    }
+    
+    // ファイルが終了している場合は再生しない
+    if (localTime >= audio.duration) {
+      audio.pause();
+      return;
+    }
+    
+    // 正常な範囲内なら再生
+    audio.currentTime = localTime;
     audio.volume = file.volume;
     audio.muted = file.muted;
     audio.playbackRate = parseFloat(playbackRate.value);
-    if (audio.currentTime < audio.duration) {
-      audio.play();
-    }
+    audio.play();
   });
   isPlaying.value = true;
 };
@@ -360,9 +377,15 @@ const seek = (event: Event) => {
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
-    // マージ後の0秒を基準にした再生位置を計算
-    const adjustedOffset = file.offset - minOffset;
-    audio.currentTime = Math.max(0, currentTime.value - adjustedOffset);
+    
+    // グローバル時間軸上でのこのファイルの開始時刻
+    const globalStartTime = file.offset - minOffset;
+    
+    // 現在のグローバル時刻から、このファイルのローカル時刻を計算
+    const localTime = currentTime.value - globalStartTime;
+    
+    // 範囲内にクリップ
+    audio.currentTime = Math.max(0, Math.min(localTime, audio.duration));
   });
 };
 
@@ -388,12 +411,17 @@ const handleTimeUpdate = () => {
   // 最小オフセットを取得
   const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
   
-  const firstAudio = audioRefs.value[0];
-  if (firstAudio) {
-    // マージ後の0秒を基準にした時間を計算
-    const adjustedOffset = (props.audioFiles[0]?.offset || 0) - minOffset;
-    currentTime.value = firstAudio.currentTime + adjustedOffset;
-    emit('timeUpdate', currentTime.value);
+  // 現在再生中のファイルを探す
+  for (let i = 0; i < audioRefs.value.length; i++) {
+    const audio = audioRefs.value[i];
+    if (audio && !audio.paused) {
+      const file = props.audioFiles[i];
+      const globalStartTime = file.offset - minOffset;
+      // ローカル時刻からグローバル時刻へ変換
+      currentTime.value = audio.currentTime + globalStartTime;
+      emit('timeUpdate', currentTime.value);
+      break;
+    }
   }
 };
 
