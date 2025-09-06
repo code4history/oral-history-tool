@@ -106,6 +106,16 @@
           </button>
         </div>
         
+        <!-- 波形表示エリア -->
+        <div class="waveform-container">
+          <div :id="`waveform-${file.id}`" class="waveform"></div>
+          <div v-if="index > 0" class="waveform-sync-controls">
+            <button @click="showWaveformComparison(index)" class="btn btn-tiny" :disabled="file.isFixed">
+              🔍 波形比較
+            </button>
+          </div>
+        </div>
+        
         <audio 
           :ref="el => audioRefs[index] = el"
           :src="file.url"
@@ -155,9 +165,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import type { AudioFile, Segment } from '../types';
 import { findBestOffset, loadAudioBuffer } from '../utils/audioSync';
+import WaveSurfer from 'wavesurfer.js';
 
 const props = defineProps<{
   audioFiles: AudioFile[]
@@ -178,6 +189,8 @@ const isSyncing = ref(false);
 const syncMethod = ref('correlation');
 const syncResult = ref<{ method: string; confidence?: number } | null>(null);
 const transcriptionStatus = ref('');
+const waveforms = ref<Map<string, any>>(new Map());
+const showingComparison = ref<string | null>(null);
 
 const syncMethodNames: Record<string, string> = {
   correlation: '相互相関法',
@@ -220,6 +233,12 @@ const handleFileUpload = async (event: Event) => {
   }
   
   emit('update', [...props.audioFiles, ...newFiles]);
+  
+  // 波形を初期化
+  await nextTick();
+  newFiles.forEach(file => {
+    initWaveform(file);
+  });
 };
 
 const handleMetadata = (index: number, event: Event) => {
@@ -280,6 +299,14 @@ const toggleMute = (index: number) => {
 
 const removeFile = (index: number) => {
   const files = [...props.audioFiles];
+  const fileId = files[index].id;
+  
+  // 波形を破棄
+  if (waveforms.value.has(fileId)) {
+    waveforms.value.get(fileId).destroy();
+    waveforms.value.delete(fileId);
+  }
+  
   URL.revokeObjectURL(files[index].url!);
   files.splice(index, 1);
   emit('update', files);
@@ -512,7 +539,7 @@ const autoSyncFiles = async () => {
       
       files.forEach((file, index) => {
         if (!file.isFixed) {
-          file.offset = Math.round(newOffsets[index] * 10) / 10;
+          file.offset = Math.round(newOffsets[index] * 100) / 100; // 0.01秒単位に修正
         }
       });
       
@@ -550,6 +577,97 @@ const formatTime = (seconds: number): string => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
+const initWaveform = async (file: AudioFile) => {
+  if (!file.url) return;
+  
+  await nextTick();
+  
+  const container = document.querySelector(`#waveform-${file.id}`);
+  if (!container) return;
+  
+  try {
+    const wavesurfer = WaveSurfer.create({
+      container: container as HTMLElement,
+      waveColor: '#4CAF50',
+      progressColor: '#2196F3',
+      cursorColor: '#FF5722',
+      height: 60,
+      normalize: true,
+      backend: 'WebAudio',
+      interact: false, // 波形自体はクリック不可
+      barWidth: 2,
+      barGap: 1
+    });
+    
+    await wavesurfer.load(file.url);
+    waveforms.value.set(file.id, wavesurfer);
+    
+    // 再生位置を同期
+    wavesurfer.on('ready', () => {
+      updateWaveformPosition(file.id);
+    });
+  } catch (error) {
+    console.error('Failed to initialize waveform:', error);
+  }
+};
+
+const updateWaveformPosition = (fileId: string) => {
+  const wavesurfer = waveforms.value.get(fileId);
+  if (!wavesurfer) return;
+  
+  const file = props.audioFiles.find(f => f.id === fileId);
+  if (!file) return;
+  
+  const audioIndex = props.audioFiles.indexOf(file);
+  const audio = audioRefs.value[audioIndex];
+  if (!audio) return;
+  
+  // 現在の再生位置を波形に反映
+  const progress = audio.currentTime / audio.duration;
+  if (!isNaN(progress)) {
+    wavesurfer.seekTo(progress);
+  }
+};
+
+const showWaveformComparison = (index: number) => {
+  const targetFile = props.audioFiles[index];
+  const referenceFile = props.audioFiles[0];
+  
+  if (showingComparison.value === targetFile.id) {
+    showingComparison.value = null;
+    return;
+  }
+  
+  showingComparison.value = targetFile.id;
+  
+  // 両方の波形を強調表示
+  const refWaveform = waveforms.value.get(referenceFile.id);
+  const targetWaveform = waveforms.value.get(targetFile.id);
+  
+  if (refWaveform) {
+    refWaveform.setWaveColor('#FF9800');
+    refWaveform.setProgressColor('#FF5722');
+  }
+  
+  if (targetWaveform) {
+    targetWaveform.setWaveColor('#2196F3');
+    targetWaveform.setProgressColor('#1976D2');
+  }
+  
+  // 3秒後に元に戻す
+  setTimeout(() => {
+    if (refWaveform) {
+      refWaveform.setWaveColor('#4CAF50');
+      refWaveform.setProgressColor('#2196F3');
+    }
+    if (targetWaveform) {
+      targetWaveform.setWaveColor('#4CAF50');
+      targetWaveform.setProgressColor('#2196F3');
+    }
+    showingComparison.value = null;
+  }, 3000);
+};
+
 const seekToTime = (time: number) => {
   currentTime.value = time;
   seek({ target: { value: time.toString() } } as any);
@@ -558,6 +676,50 @@ const seekToTime = (time: number) => {
     setTimeout(() => playAll(), 100);
   }
 };
+
+// 再生位置が更新されたら波形も更新
+watch(() => currentTime.value, () => {
+  props.audioFiles.forEach(file => {
+    updateWaveformPosition(file.id);
+  });
+});
+
+// ファイルリストが変更されたら波形を初期化
+watch(() => props.audioFiles, async (newFiles, oldFiles) => {
+  // 新しく追加されたファイルの波形を初期化
+  for (const file of newFiles) {
+    if (!waveforms.value.has(file.id) && file.url) {
+      await initWaveform(file);
+    }
+  }
+  
+  // 削除されたファイルの波形を破棄
+  if (oldFiles) {
+    for (const oldFile of oldFiles) {
+      if (!newFiles.find(f => f.id === oldFile.id)) {
+        if (waveforms.value.has(oldFile.id)) {
+          waveforms.value.get(oldFile.id).destroy();
+          waveforms.value.delete(oldFile.id);
+        }
+      }
+    }
+  }
+}, { deep: true });
+
+onMounted(async () => {
+  // 既存のファイルの波形を初期化
+  for (const file of props.audioFiles) {
+    await initWaveform(file);
+  }
+});
+
+onUnmounted(() => {
+  // すべての波形を破棄
+  waveforms.value.forEach(wavesurfer => {
+    wavesurfer.destroy();
+  });
+  waveforms.value.clear();
+});
 
 defineExpose({
   seekToTime
@@ -759,5 +921,23 @@ defineExpose({
 .separator {
   margin: 0 0.25rem;
   color: #999;
+}
+
+.waveform-container {
+  margin-top: 1rem;
+  padding: 0.5rem;
+  background: #f9f9f9;
+  border-radius: 4px;
+}
+
+.waveform {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.waveform-sync-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 </style>
