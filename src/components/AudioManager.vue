@@ -613,8 +613,10 @@ const initWaveform = async (file: AudioFile) => {
     const containerWidth = container.offsetWidth || 800;
     
     // 0.01秒 = 1ピクセルに設定
-    // minPxPerSecを使用してズームレベルを設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
+    
+    // パディング付きの音声データを作成
+    const paddedUrl = await createPaddedAudio(file);
     
     const wavesurfer = WaveSurfer.create({
       container: container,
@@ -632,7 +634,7 @@ const initWaveform = async (file: AudioFile) => {
       barHeight: 1 // バーの高さを正規化
     });
     
-    await wavesurfer.load(file.url);
+    await wavesurfer.load(paddedUrl || file.url);
     waveforms.value.set(file.id, wavesurfer);
     
     // 再生位置を同期
@@ -651,12 +653,17 @@ const updateWaveformPosition = (fileId: string) => {
   const file = props.audioFiles.find(f => f.id === fileId);
   if (!file) return;
   
-  const audioIndex = props.audioFiles.indexOf(file);
-  const audio = audioRefs.value[audioIndex];
-  if (!audio) return;
+  // 最小オフセットを取得
+  const minOffset = getMinOffset();
   
-  // 現在の再生位置を波形に反映
-  const progress = audio.currentTime / audio.duration;
+  // 全体の長さを計算
+  const maxEndTime = Math.max(...props.audioFiles.map(f => (f.offset - minOffset) + f.duration));
+  
+  // 調整されたオフセット
+  const adjustedOffset = file.offset - minOffset;
+  
+  // 現在の再生位置を波形に反映（パディングを考慮）
+  const progress = currentTime.value / maxEndTime;
   if (!isNaN(progress)) {
     wavesurfer.seekTo(progress);
   }
@@ -711,6 +718,9 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
+    // パディング付きの音声データを作成
+    const paddedUrl = await createPaddedAudio(file);
+    
     const wavesurfer = WaveSurfer.create({
       container: container,
       waveColor: waveColor,
@@ -727,7 +737,7 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
       barHeight: 1
     });
     
-    await wavesurfer.load(file.url);
+    await wavesurfer.load(paddedUrl || file.url);
     waveforms.value.set(file.id, wavesurfer);
     
     // 現在の再生位置を反映
@@ -742,6 +752,121 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
   } catch (error) {
     console.error('Failed to recreate waveform:', error);
   }
+};
+
+// パディング付きの音声データを作成
+const createPaddedAudio = async (file: AudioFile): Promise<string | null> => {
+  if (!file.blob) return null;
+  
+  try {
+    const audioContext = new AudioContext();
+    const arrayBuffer = await file.blob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    
+    // 最小オフセットを取得
+    const minOffset = getMinOffset();
+    
+    // すべてのファイルの終了時間を計算
+    const maxEndTime = Math.max(...props.audioFiles.map(f => (f.offset - minOffset) + f.duration));
+    
+    // パディングの計算
+    const startPadding = Math.max(0, (file.offset - minOffset)); // 前の無音部分
+    const endPadding = Math.max(0, maxEndTime - ((file.offset - minOffset) + file.duration)); // 後ろの無音部分
+    
+    // 新しいバッファを作成
+    const sampleRate = audioBuffer.sampleRate;
+    const totalDuration = startPadding + audioBuffer.duration + endPadding;
+    const totalLength = Math.ceil(totalDuration * sampleRate);
+    const paddedBuffer = audioContext.createBuffer(
+      audioBuffer.numberOfChannels,
+      totalLength,
+      sampleRate
+    );
+    
+    // 各チャンネルにデータをコピー
+    for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+      const channelData = paddedBuffer.getChannelData(channel);
+      const originalData = audioBuffer.getChannelData(channel);
+      const startOffset = Math.floor(startPadding * sampleRate);
+      
+      // 元の音声データを適切な位置にコピー
+      for (let i = 0; i < originalData.length; i++) {
+        if (startOffset + i < channelData.length) {
+          channelData[startOffset + i] = originalData[i];
+        }
+      }
+      // 前後のパディング部分は0（無音）のまま
+    }
+    
+    // AudioBufferをBlobに変換
+    const offlineContext = new OfflineAudioContext(
+      paddedBuffer.numberOfChannels,
+      paddedBuffer.length,
+      paddedBuffer.sampleRate
+    );
+    const source = offlineContext.createBufferSource();
+    source.buffer = paddedBuffer;
+    source.connect(offlineContext.destination);
+    source.start();
+    
+    const renderedBuffer = await offlineContext.startRendering();
+    
+    // WAV形式に変換
+    const wav = audioBufferToWav(renderedBuffer);
+    const blob = new Blob([wav], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error('Failed to create padded audio:', error);
+    return null;
+  }
+};
+
+// AudioBufferをWAV形式に変換するヘルパー関数
+const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
+  const length = buffer.length * buffer.numberOfChannels * 2 + 44;
+  const arrayBuffer = new ArrayBuffer(length);
+  const view = new DataView(arrayBuffer);
+  const channels: Float32Array[] = [];
+  let offset = 0;
+  let pos = 0;
+  
+  // 各チャンネルのデータを取得
+  for (let i = 0; i < buffer.numberOfChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+  
+  // WAVヘッダを書き込み
+  const setString = (offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+  
+  setString(pos, 'RIFF'); pos += 4;
+  view.setUint32(pos, length - 8, true); pos += 4;
+  setString(pos, 'WAVE'); pos += 4;
+  setString(pos, 'fmt '); pos += 4;
+  view.setUint32(pos, 16, true); pos += 4;
+  view.setUint16(pos, 1, true); pos += 2;
+  view.setUint16(pos, buffer.numberOfChannels, true); pos += 2;
+  view.setUint32(pos, buffer.sampleRate, true); pos += 4;
+  view.setUint32(pos, buffer.sampleRate * buffer.numberOfChannels * 2, true); pos += 4;
+  view.setUint16(pos, buffer.numberOfChannels * 2, true); pos += 2;
+  view.setUint16(pos, 16, true); pos += 2;
+  setString(pos, 'data'); pos += 4;
+  view.setUint32(pos, length - pos - 4, true); pos += 4;
+  
+  // オーディオデータを書き込み
+  const volume = 0x7FFF;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, channels[channel][i]));
+      view.setInt16(pos, sample * volume, true);
+      pos += 2;
+    }
+  }
+  
+  return arrayBuffer;
 };
 
 const seekToTime = (time: number) => {
