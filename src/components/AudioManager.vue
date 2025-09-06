@@ -108,6 +108,10 @@
         
         <!-- 波形表示エリア -->
         <div class="waveform-container">
+          <div class="waveform-info">
+            <span class="offset-label">オフセット: {{ file.offset.toFixed(2) }}秒</span>
+            <span v-if="file.offset < 0" class="offset-label">（{{ Math.abs(file.offset).toFixed(2) }}秒先行）</span>
+          </div>
           <div :id="`waveform-${file.id}`" class="waveform"></div>
           <div v-if="index > 0" class="waveform-sync-controls">
             <button @click="showWaveformComparison(index)" class="btn btn-tiny" :disabled="file.isFixed">
@@ -199,7 +203,11 @@ const syncMethodNames: Record<string, string> = {
 };
 
 const maxDuration = computed(() => {
-  return Math.max(...props.audioFiles.map(f => f.duration + f.offset), 0);
+  // 最小オフセットを取得（負の値の場合、そのファイルが先に始まる）
+  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  // 各ファイルの終了時刻を計算（マージ後の0秒基準）
+  const endTimes = props.audioFiles.map(f => (f.offset - minOffset) + f.duration);
+  return Math.max(...endTimes, 0);
 });
 
 const canAutoSync = computed(() => {
@@ -321,10 +329,15 @@ const togglePlayPause = () => {
 };
 
 const playAll = () => {
+  // 最小オフセットを取得（負の値の場合、そのファイルが先に始まる）
+  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
-    audio.currentTime = Math.max(0, currentTime.value - file.offset);
+    // マージ後の0秒を基準にした再生位置を計算
+    const adjustedOffset = file.offset - minOffset;
+    audio.currentTime = Math.max(0, currentTime.value - adjustedOffset);
     audio.volume = file.volume;
     audio.muted = file.muted;
     audio.playbackRate = parseFloat(playbackRate.value);
@@ -346,10 +359,15 @@ const seek = (event: Event) => {
   const input = event.target as HTMLInputElement;
   currentTime.value = parseFloat(input.value);
   
+  // 最小オフセットを取得
+  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
-    audio.currentTime = Math.max(0, currentTime.value - file.offset);
+    // マージ後の0秒を基準にした再生位置を計算
+    const adjustedOffset = file.offset - minOffset;
+    audio.currentTime = Math.max(0, currentTime.value - adjustedOffset);
   });
 };
 
@@ -372,9 +390,14 @@ const updatePlaybackRate = () => {
 const handleTimeUpdate = () => {
   if (audioRefs.value.length === 0) return;
   
+  // 最小オフセットを取得
+  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  
   const firstAudio = audioRefs.value[0];
   if (firstAudio) {
-    currentTime.value = firstAudio.currentTime + (props.audioFiles[0]?.offset || 0);
+    // マージ後の0秒を基準にした時間を計算
+    const adjustedOffset = (props.audioFiles[0]?.offset || 0) - minOffset;
+    currentTime.value = firstAudio.currentTime + adjustedOffset;
     emit('timeUpdate', currentTime.value);
   }
 };
@@ -730,6 +753,11 @@ const seekToTime = (time: number) => {
   }
 };
 
+// 最小オフセットを取得するヘルパー関数
+const getMinOffset = () => {
+  return Math.min(0, ...props.audioFiles.map(f => f.offset));
+};
+
 // 再生位置が更新されたら波形も更新
 watch(() => currentTime.value, () => {
   props.audioFiles.forEach(file => {
@@ -994,5 +1022,16 @@ defineExpose({
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+.waveform-info {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: #666;
+}
+
+.offset-label {
+  margin-right: 1rem;
+  font-family: monospace;
 }
 </style>
