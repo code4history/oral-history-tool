@@ -628,10 +628,8 @@ const initWaveform = async (file: AudioFile) => {
   
   // 既存の波形を必ず破棄
   if (waveforms.value.has(file.id)) {
-    console.log(`Destroying existing waveform for ${file.id}`);
-    const existingWaveform = waveforms.value.get(file.id);
-    existingWaveform.destroy();
-    waveforms.value.delete(file.id);
+    console.log(`WARNING: Waveform already exists for ${file.id}, skipping initialization`);
+    return; // 既に存在する場合は初期化をスキップ
   }
   
   await nextTick();
@@ -642,8 +640,10 @@ const initWaveform = async (file: AudioFile) => {
     return;
   }
   
-  // コンテナの中身をクリア
-  container.innerHTML = '';
+  // コンテナの中身を完全にクリア
+  while (container.firstChild) {
+    container.removeChild(container.firstChild);
+  }
   
   try {
     // コンテナの幅を取得
@@ -652,8 +652,9 @@ const initWaveform = async (file: AudioFile) => {
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
-    // パディング付きの音声データを作成
-    const paddedUrl = await createPaddedAudio(file);
+    // パディング付きの音声データを作成（一時的に無効化）
+    // const paddedUrl = await createPaddedAudio(file);
+    const paddedUrl = null;
     
     const wavesurfer = WaveSurfer.create({
       container: container,
@@ -761,8 +762,7 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
     
     // パディング付きの音声データを作成（一時的に無効化）
-    // const paddedUrl = await createPaddedAudio(file);
-    const paddedUrl = null; // パディングを一時的に無効化
+    const paddedUrl = null;
     
     const wavesurfer = WaveSurfer.create({
       container: container,
@@ -953,26 +953,33 @@ watch(() => currentTime.value, () => {
 });
 
 // ファイルリストが変更されたら波形を初期化
+// deepをfalseにして、ファイル配列自体の変更のみを検知
 watch(() => props.audioFiles, async (newFiles, oldFiles) => {
-  // 新しく追加されたファイルの波形を初期化
-  for (const file of newFiles) {
-    if (!waveforms.value.has(file.id) && file.url) {
-      await initWaveform(file);
+  // ファイルIDのセットを作成
+  const oldIds = new Set(oldFiles?.map(f => f.id) || []);
+  const newIds = new Set(newFiles.map(f => f.id));
+  
+  // 削除されたファイルの波形を破棄
+  for (const oldId of oldIds) {
+    if (!newIds.has(oldId) && waveforms.value.has(oldId)) {
+      console.log(`Destroying waveform for removed file: ${oldId}`);
+      try {
+        waveforms.value.get(oldId).destroy();
+      } catch (e) {
+        console.error(`Error destroying waveform ${oldId}:`, e);
+      }
+      waveforms.value.delete(oldId);
     }
   }
   
-  // 削除されたファイルの波形を破棄
-  if (oldFiles) {
-    for (const oldFile of oldFiles) {
-      if (!newFiles.find(f => f.id === oldFile.id)) {
-        if (waveforms.value.has(oldFile.id)) {
-          waveforms.value.get(oldFile.id).destroy();
-          waveforms.value.delete(oldFile.id);
-        }
-      }
+  // 新しく追加されたファイルの波形を初期化
+  for (const file of newFiles) {
+    if (!oldIds.has(file.id) && file.url && !waveforms.value.has(file.id)) {
+      console.log(`Initializing waveform for new file: ${file.id}`);
+      await initWaveform(file);
     }
   }
-}, { deep: true, immediate: true }); // immediate: trueで初回マウント時も実行
+}, { deep: false, immediate: true }); // deepをfalseにして配列の参照変更のみ検知
 
 onUnmounted(() => {
   // すべての波形を破棄
