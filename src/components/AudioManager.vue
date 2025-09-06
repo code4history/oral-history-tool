@@ -241,12 +241,7 @@ const handleFileUpload = async (event: Event) => {
   }
   
   emit('update', [...props.audioFiles, ...newFiles]);
-  
-  // 波形を初期化
-  await nextTick();
-  newFiles.forEach(file => {
-    initWaveform(file);
-  });
+  // 波形の初期化はwatchで自動的に行われる
 };
 
 const handleMetadata = (index: number, event: Event) => {
@@ -603,10 +598,19 @@ const formatTime = (seconds: number): string => {
 const initWaveform = async (file: AudioFile) => {
   if (!file.url) return;
   
+  // 既に初期化済みの場合はスキップ
+  if (waveforms.value.has(file.id)) {
+    console.log(`Waveform already initialized for ${file.id}`);
+    return;
+  }
+  
   await nextTick();
   
   const container = document.querySelector(`#waveform-${file.id}`) as HTMLElement;
-  if (!container) return;
+  if (!container) {
+    console.warn(`Container not found for ${file.id}`);
+    return;
+  }
   
   try {
     // コンテナの幅を取得
@@ -910,14 +914,7 @@ watch(() => props.audioFiles, async (newFiles, oldFiles) => {
       }
     }
   }
-}, { deep: true });
-
-onMounted(async () => {
-  // 既存のファイルの波形を初期化
-  for (const file of props.audioFiles) {
-    await initWaveform(file);
-  }
-});
+}, { deep: true, immediate: true }); // immediate: trueで初回マウント時も実行
 
 onUnmounted(() => {
   // すべての波形を破棄
