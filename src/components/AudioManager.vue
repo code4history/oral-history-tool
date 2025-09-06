@@ -22,7 +22,7 @@
       <button 
         @click="autoSyncFiles" 
         class="btn btn-secondary"
-        :disabled="audioFiles.length < 2 || isSyncing"
+        :disabled="!canAutoSync"
       >
         {{ isSyncing ? '同期中...' : '自動同期' }}
       </button>
@@ -46,18 +46,40 @@
         </div>
         
         <div class="audio-controls">
-          <label>
-            オフセット:
+          <!-- 位置合わせ完了トグル -->
+          <label class="fix-toggle" v-if="index > 0">
             <input 
-              type="range" 
-              :min="-30" 
-              :max="30" 
-              :value="file.offset"
-              @input="updateOffset(index, $event)"
-              class="offset-slider"
+              type="checkbox"
+              :checked="file.isFixed"
+              @change="toggleFixed(index)"
             />
-            <span>{{ file.offset }}秒</span>
+            <span>{{ file.isFixed ? '🔒' : '🔓' }} 位置固定</span>
           </label>
+          
+          <!-- オフセット調整UI -->
+          <div class="offset-control" :class="{ disabled: file.isFixed || index === 0 }">
+            <label>オフセット:</label>
+            <input 
+              type="number"
+              :value="index === 0 ? 0 : file.offset"
+              @input="updateOffsetDirect(index, $event)"
+              :disabled="file.isFixed || index === 0"
+              step="0.01"
+              class="offset-input"
+            />
+            <span>秒</span>
+            
+            <!-- 微調整ボタン -->
+            <div class="offset-buttons" v-if="index > 0 && !file.isFixed">
+              <button @click="adjustOffset(index, -1)" class="btn btn-tiny">◀ -1s</button>
+              <button @click="adjustOffset(index, -0.1)" class="btn btn-tiny">◀ -0.1s</button>
+              <button @click="adjustOffset(index, -0.01)" class="btn btn-tiny">◀ -0.01s</button>
+              <span class="separator">|</span>
+              <button @click="adjustOffset(index, 0.01)" class="btn btn-tiny">▶ +0.01s</button>
+              <button @click="adjustOffset(index, 0.1)" class="btn btn-tiny">▶ +0.1s</button>
+              <button @click="adjustOffset(index, 1)" class="btn btn-tiny">▶ +1s</button>
+            </div>
+          </div>
           
           <label>
             音量:
@@ -167,6 +189,13 @@ const maxDuration = computed(() => {
   return Math.max(...props.audioFiles.map(f => f.duration + f.offset), 0);
 });
 
+const canAutoSync = computed(() => {
+  if (props.audioFiles.length < 2 || isSyncing.value) return false;
+  // 先頭以外の全ファイルがFIX済みなら自動同期不可
+  const nonFirstFiles = props.audioFiles.slice(1);
+  return !nonFirstFiles.every(f => f.isFixed);
+});
+
 const handleFileUpload = async (event: Event) => {
   const input = event.target as HTMLInputElement;
   if (!input.files) return;
@@ -184,7 +213,8 @@ const handleFileUpload = async (event: Event) => {
       duration: 0,
       offset: 0,
       volume: 1,
-      muted: false
+      muted: false,
+      isFixed: false
     };
     newFiles.push(audioFile);
   }
@@ -203,6 +233,27 @@ const updateOffset = (index: number, event: Event) => {
   const input = event.target as HTMLInputElement;
   const files = [...props.audioFiles];
   files[index].offset = parseFloat(input.value);
+  emit('update', files);
+};
+
+const updateOffsetDirect = (index: number, event: Event) => {
+  if (index === 0) return; // 最初のファイルは基準なので変更不可
+  const input = event.target as HTMLInputElement;
+  const files = [...props.audioFiles];
+  files[index].offset = parseFloat(input.value) || 0;
+  emit('update', files);
+};
+
+const adjustOffset = (index: number, delta: number) => {
+  if (index === 0) return;
+  const files = [...props.audioFiles];
+  files[index].offset = Math.round((files[index].offset + delta) * 100) / 100; // 0.01秒単位に丸め
+  emit('update', files);
+};
+
+const toggleFixed = (index: number) => {
+  const files = [...props.audioFiles];
+  files[index].isFixed = !files[index].isFixed;
   emit('update', files);
 };
 
@@ -443,6 +494,13 @@ const autoSyncFiles = async () => {
       const newOffsets: number[] = [0];
       
       for (let i = 1; i < props.audioFiles.length; i++) {
+        // FIX済みファイルはスキップ
+        if (files[i].isFixed) {
+          newOffsets.push(files[i].offset);
+          console.log(`File ${i}: Skipped (Fixed)`);
+          continue;
+        }
+        
         const targetBuffer = await loadAudioBuffer(props.audioFiles[i].blob);
         const result = await findBestOffset(referenceBuffer, targetBuffer);
         newOffsets.push(result.offset);
@@ -453,7 +511,9 @@ const autoSyncFiles = async () => {
       }
       
       files.forEach((file, index) => {
-        file.offset = Math.round(newOffsets[index] * 10) / 10;
+        if (!file.isFixed) {
+          file.offset = Math.round(newOffsets[index] * 10) / 10;
+        }
       });
       
       syncResult.value = {
@@ -651,5 +711,53 @@ defineExpose({
   gap: 2rem;
   font-size: 0.875rem;
   color: #155724;
+}
+
+.fix-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: #f0f0f0;
+  border-radius: 4px;
+}
+
+.fix-toggle input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.offset-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.offset-control.disabled {
+  opacity: 0.5;
+}
+
+.offset-input {
+  width: 80px;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.offset-buttons {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.btn-tiny {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.separator {
+  margin: 0 0.25rem;
+  color: #999;
 }
 </style>

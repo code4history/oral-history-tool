@@ -18,6 +18,7 @@ export interface AudioFile {
   offset: number;
   volume: number;
   muted: boolean;
+  isFixed?: boolean; // 位置合わせ完了フラグ
 }
 
 export interface StoredAudioFile extends Omit<AudioFile, 'blob' | 'url'> {
