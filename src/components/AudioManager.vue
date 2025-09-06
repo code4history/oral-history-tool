@@ -203,10 +203,10 @@ const syncMethodNames: Record<string, string> = {
 };
 
 const maxDuration = computed(() => {
-  // 最小オフセットを取得（負の値の場合、そのファイルが先に始まる）
-  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
-  // 各ファイルの終了時刻を計算（マージ後の0秒基準）
-  const endTimes = props.audioFiles.map(f => (f.offset - minOffset) + f.duration);
+  // 各ファイルのグローバル開始時刻を計算
+  const globalStartTimes = getGlobalStartTimes();
+  // 各ファイルの終了時刻を計算
+  const endTimes = props.audioFiles.map((f, i) => globalStartTimes[i] + f.duration);
   return Math.max(...endTimes, 0);
 });
 
@@ -324,15 +324,15 @@ const togglePlayPause = () => {
 };
 
 const playAll = () => {
-  // 最小オフセットを取得（負の値の場合、そのファイルが先に始まる）
-  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  // 各ファイルのグローバル開始時刻を取得
+  const globalStartTimes = getGlobalStartTimes();
   
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
     
     // グローバル時間軸上でのこのファイルの開始時刻
-    const globalStartTime = file.offset - minOffset;
+    const globalStartTime = globalStartTimes[index];
     
     // 現在のグローバル時刻から、このファイルのローカル時刻を計算
     const localTime = currentTime.value - globalStartTime;
@@ -371,15 +371,15 @@ const seek = (event: Event) => {
   const input = event.target as HTMLInputElement;
   currentTime.value = parseFloat(input.value);
   
-  // 最小オフセットを取得
-  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  // 各ファイルのグローバル開始時刻を取得
+  const globalStartTimes = getGlobalStartTimes();
   
   audioRefs.value.forEach((audio, index) => {
     if (!audio) return;
     const file = props.audioFiles[index];
     
     // グローバル時間軸上でのこのファイルの開始時刻
-    const globalStartTime = file.offset - minOffset;
+    const globalStartTime = globalStartTimes[index];
     
     // 現在のグローバル時刻から、このファイルのローカル時刻を計算
     const localTime = currentTime.value - globalStartTime;
@@ -408,15 +408,15 @@ const updatePlaybackRate = () => {
 const handleTimeUpdate = () => {
   if (audioRefs.value.length === 0) return;
   
-  // 最小オフセットを取得
-  const minOffset = Math.min(0, ...props.audioFiles.map(f => f.offset));
+  // 各ファイルのグローバル開始時刻を取得
+  const globalStartTimes = getGlobalStartTimes();
   
   // 現在再生中のファイルを探す
   for (let i = 0; i < audioRefs.value.length; i++) {
     const audio = audioRefs.value[i];
     if (audio && !audio.paused) {
       const file = props.audioFiles[i];
-      const globalStartTime = file.offset - minOffset;
+      const globalStartTime = globalStartTimes[i];
       // ローカル時刻からグローバル時刻へ変換
       currentTime.value = audio.currentTime + globalStartTime;
       emit('timeUpdate', currentTime.value);
@@ -691,19 +691,21 @@ const updateWaveformPosition = (fileId: string) => {
   const file = props.audioFiles.find(f => f.id === fileId);
   if (!file) return;
   
-  // 最小オフセットを取得
-  const minOffset = getMinOffset();
+  const fileIndex = props.audioFiles.indexOf(file);
+  const globalStartTimes = getGlobalStartTimes();
+  const globalStartTime = globalStartTimes[fileIndex];
   
-  // 全体の長さを計算
-  const maxEndTime = Math.max(...props.audioFiles.map(f => (f.offset - minOffset) + f.duration));
+  // ローカル時刻を計算
+  const localTime = currentTime.value - globalStartTime;
   
-  // 調整されたオフセット
-  const adjustedOffset = file.offset - minOffset;
-  
-  // 現在の再生位置を波形に反映（パディングを考慮）
-  const progress = currentTime.value / maxEndTime;
-  if (!isNaN(progress)) {
-    wavesurfer.seekTo(progress);
+  // 波形上の位置を更新
+  if (localTime >= 0 && localTime <= file.duration) {
+    const progress = localTime / file.duration;
+    if (!isNaN(progress)) {
+      wavesurfer.seekTo(progress);
+    }
+  } else {
+    wavesurfer.seekTo(0);
   }
 };
 
@@ -805,15 +807,17 @@ const createPaddedAudio = async (file: AudioFile): Promise<string | null> => {
     const arrayBuffer = await file.blob.arrayBuffer();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
     
-    // 最小オフセットを取得
-    const minOffset = getMinOffset();
+    // グローバル開始時刻を取得
+    const globalStartTimes = getGlobalStartTimes();
+    const fileIndex = props.audioFiles.indexOf(file);
+    const globalStartTime = globalStartTimes[fileIndex];
     
-    // すべてのファイルの終了時間を計算
-    const maxEndTime = Math.max(...props.audioFiles.map(f => (f.offset - minOffset) + f.duration));
+    // 総時間を計算
+    const totalDuration = maxDuration.value;
     
     // パディングの計算
-    const startPadding = Math.max(0, (file.offset - minOffset)); // 前の無音部分
-    const endPadding = Math.max(0, maxEndTime - ((file.offset - minOffset) + file.duration)); // 後ろの無音部分
+    const startPadding = globalStartTime; // 前の無音部分
+    const endPadding = Math.max(0, totalDuration - (globalStartTime + file.duration)); // 後ろの無音部分
     
     // 新しいバッファを作成
     const sampleRate = audioBuffer.sampleRate;
@@ -920,9 +924,32 @@ const seekToTime = (time: number) => {
   }
 };
 
-// 最小オフセットを取得するヘルパー関数
+// 各ファイルのグローバル開始時刻を計算
+const getGlobalStartTimes = () => {
+  const startTimes: number[] = [];
+  
+  // 第1音声は常に基準
+  startTimes[0] = 0;
+  
+  // 第2音声以降のオフセットが負の場合、全体を調整
+  for (let i = 1; i < props.audioFiles.length; i++) {
+    const offset = props.audioFiles[i].offset;
+    if (offset < 0) {
+      // 負のオフセットの場合、第1音声をその分遅らせる
+      startTimes[0] = Math.max(startTimes[0], -offset);
+      startTimes[i] = 0;
+    } else {
+      startTimes[i] = offset;
+    }
+  }
+  
+  return startTimes;
+};
+
+// 最小オフセットを取得するヘルパー関数（互換性のため残す）
 const getMinOffset = () => {
-  return Math.min(0, ...props.audioFiles.map(f => f.offset));
+  const globalStartTimes = getGlobalStartTimes();
+  return Math.min(...globalStartTimes);
 };
 
 // 再生位置が更新されたら波形も更新
