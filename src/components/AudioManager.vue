@@ -813,16 +813,16 @@ const createPaddedAudio = async (file: AudioFile): Promise<string | null> => {
     const globalStartTime = globalStartTimes[fileIndex];
     
     // 総時間を計算
-    const totalDuration = maxDuration.value;
+    const totalGlobalDuration = maxDuration.value;
     
     // パディングの計算
     const startPadding = globalStartTime; // 前の無音部分
-    const endPadding = Math.max(0, totalDuration - (globalStartTime + file.duration)); // 後ろの無音部分
+    const endPadding = Math.max(0, totalGlobalDuration - (globalStartTime + file.duration)); // 後ろの無音部分
     
     // 新しいバッファを作成
     const sampleRate = audioBuffer.sampleRate;
-    const totalDuration = startPadding + audioBuffer.duration + endPadding;
-    const totalLength = Math.ceil(totalDuration * sampleRate);
+    const totalBufferDuration = startPadding + audioBuffer.duration + endPadding;
+    const totalLength = Math.ceil(totalBufferDuration * sampleRate);
     const paddedBuffer = audioContext.createBuffer(
       audioBuffer.numberOfChannels,
       totalLength,
