@@ -9,7 +9,7 @@
         ref="fileInput"
         style="display: none"
       />
-      <button @click="$refs.fileInput.click()" class="btn btn-secondary">
+      <button @click="($refs.fileInput as any)?.click()" class="btn btn-secondary">
         MP3ファイルを追加
       </button>
       <button 
@@ -121,7 +121,7 @@
         </div>
         
         <audio 
-          :ref="el => setAudioRef(index, el)"
+          :ref="(el: any) => setAudioRef(index, el as HTMLAudioElement | null)"
           :src="file.url"
           @loadedmetadata="handleMetadata(index, $event)"
           @timeupdate="handleTimeUpdate"
@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue';
 import type { AudioFile, Segment } from '../types';
 import { findBestOffset, loadAudioBuffer } from '../utils/audioSync';
 import WaveSurfer from 'wavesurfer.js';
@@ -251,12 +251,7 @@ const handleMetadata = (index: number, event: Event) => {
   emit('update', files);
 };
 
-const updateOffset = (index: number, event: Event) => {
-  const input = event.target as HTMLInputElement;
-  const files = [...props.audioFiles];
-  files[index].offset = parseFloat(input.value);
-  emit('update', files);
-};
+// updateOffset関数は削除（updateOffsetDirectに置き換え）
 
 const updateOffsetDirect = (index: number, event: Event) => {
   if (index === 0) return; // 最初のファイルは基準なので変更不可
@@ -393,9 +388,10 @@ const seek = (event: Event) => {
   // 各ファイルのグローバル開始時刻を取得
   const globalStartTimes = getGlobalStartTimes();
   
-  props.audioFiles.forEach((file, index) => {
+  props.audioFiles.forEach((_file, index) => {
     const audio = audioRefs.value.get(index);
     if (!audio) return;
+    const file = props.audioFiles[index];
     
     // グローバル時間軸上でのこのファイルの開始時刻
     const globalStartTime = globalStartTimes[index];
@@ -434,7 +430,7 @@ const handleTimeUpdate = () => {
   for (let i = 0; i < props.audioFiles.length; i++) {
     const audio = audioRefs.value.get(i);
     if (audio && !audio.paused) {
-      const file = props.audioFiles[i];
+      // const file = props.audioFiles[i]; // 使用されていない
       const globalStartTime = globalStartTimes[i];
       // ローカル時刻からグローバル時刻へ変換
       currentTime.value = audio.currentTime + globalStartTime;
@@ -666,7 +662,7 @@ const initWaveform = async (file: AudioFile) => {
   
   try {
     // コンテナの幅を取得
-    const containerWidth = container.offsetWidth || 800;
+    // const containerWidth = container.offsetWidth || 800; // 使用されていない
     
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
@@ -683,9 +679,9 @@ const initWaveform = async (file: AudioFile) => {
       height: 60,
       normalize: true,
       backend: 'WebAudio',
-      interact: false, // 波形自体はクリック不可
+      interact: true, // 波形クリックを有効化
       minPxPerSec: minPxPerSec, // 最小ピクセル/秒
-      scrollParent: true, // スクロールを有効化
+      // scrollParent: true, // WaveSurfer v7では未実装
       barWidth: 1, // バーの幅を1ピクセルに
       barGap: 0, // ギャップをなくして継目なく表示
       barHeight: 1 // バーの高さを正規化
@@ -697,6 +693,18 @@ const initWaveform = async (file: AudioFile) => {
     // 再生位置を同期
     wavesurfer.on('ready', () => {
       updateWaveformPosition(file.id);
+    });
+    
+    // 波形クリックでシーク
+    wavesurfer.on('seek', (progress: number) => {
+      const fileIndex = props.audioFiles.indexOf(file);
+      const audio = audioRefs.value.get(fileIndex);
+      if (audio) {
+        const newTime = audio.duration * progress;
+        const globalStartTimes = getGlobalStartTimes();
+        const globalTime = newTime + globalStartTimes[fileIndex];
+        seekToTime(globalTime);
+      }
     });
   } catch (error) {
     console.error('Failed to initialize waveform:', error);
@@ -775,7 +783,7 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
   
   try {
     // コンテナの幅を取得
-    const containerWidth = container.offsetWidth || 800;
+    // const containerWidth = container.offsetWidth || 800; // 使用されていない
     
     // 0.01秒 = 1ピクセルに設定
     const minPxPerSec = 100; // 1秒 = 100ピクセル (0.01秒 = 1ピクセル)
@@ -791,9 +799,9 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
       height: 60,
       normalize: true,
       backend: 'WebAudio',
-      interact: false,
+      interact: true, // 波形クリックを有効化
       minPxPerSec: minPxPerSec,
-      scrollParent: true,
+      // scrollParent: true,
       barWidth: 1,
       barGap: 0,
       barHeight: 1
@@ -816,8 +824,9 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
   }
 };
 
-// パディング付きの音声データを作成
-const createPaddedAudio = async (file: AudioFile): Promise<string | null> => {
+// パディング付きの音声データを作成（今後の実装用）
+/* eslint-disable @typescript-eslint/no-unused-vars */
+const _createPaddedAudio = async (file: AudioFile): Promise<string | null> => {
   if (!file.blob) return null;
   
   try {
@@ -891,7 +900,7 @@ const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
   const arrayBuffer = new ArrayBuffer(length);
   const view = new DataView(arrayBuffer);
   const channels: Float32Array[] = [];
-  let offset = 0;
+  // let offset = 0;
   let pos = 0;
   
   // 各チャンネルのデータを取得
@@ -932,6 +941,7 @@ const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
   
   return arrayBuffer;
 };
+/* eslint-enable @typescript-eslint/no-unused-vars */
 
 const seekToTime = (time: number) => {
   currentTime.value = time;
@@ -959,7 +969,7 @@ const getGlobalStartTimes = () => {
 };
 
 // 最小オフセットを取得するヘルパー関数（互換性のため残す）
-const getMinOffset = () => {
+const _getMinOffset = () => {
   const globalStartTimes = getGlobalStartTimes();
   return Math.min(...globalStartTimes);
 };
