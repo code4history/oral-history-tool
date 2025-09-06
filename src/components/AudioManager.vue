@@ -121,7 +121,7 @@
         </div>
         
         <audio 
-          :ref="el => audioRefs[index] = el"
+          :ref="el => setAudioRef(index, el)"
           :src="file.url"
           @loadedmetadata="handleMetadata(index, $event)"
           @timeupdate="handleTimeUpdate"
@@ -184,7 +184,7 @@ const emit = defineEmits<{
   addSegment: [segment: Segment]
 }>();
 
-const audioRefs = ref<(HTMLAudioElement | null)[]>([]);
+const audioRefs = ref<Map<number, HTMLAudioElement>>(new Map());
 const isPlaying = ref(false);
 const currentTime = ref(0);
 const playbackRate = ref('1');
@@ -285,8 +285,9 @@ const updateVolume = (index: number, event: Event) => {
   files[index].volume = parseFloat(input.value) / 100;
   emit('update', files);
   
-  if (audioRefs.value[index]) {
-    audioRefs.value[index]!.volume = files[index].volume;
+  const audio = audioRefs.value.get(index);
+  if (audio) {
+    audio.volume = files[index].volume;
   }
 };
 
@@ -295,8 +296,9 @@ const toggleMute = (index: number) => {
   files[index].muted = !files[index].muted;
   emit('update', files);
   
-  if (audioRefs.value[index]) {
-    audioRefs.value[index]!.muted = files[index].muted;
+  const audio = audioRefs.value.get(index);
+  if (audio) {
+    audio.muted = files[index].muted;
   }
 };
 
@@ -327,9 +329,16 @@ const playAll = () => {
   // 各ファイルのグローバル開始時刻を取得
   const globalStartTimes = getGlobalStartTimes();
   
-  audioRefs.value.forEach((audio, index) => {
-    if (!audio) return;
-    const file = props.audioFiles[index];
+  console.log('=== PlayAll Debug ===');
+  console.log('Audio files count:', props.audioFiles.length);
+  console.log('Audio refs count:', audioRefs.value.size);
+  
+  props.audioFiles.forEach((file, index) => {
+    const audio = audioRefs.value.get(index);
+    if (!audio) {
+      console.warn(`Audio element ${index} is null`);
+      return;
+    }
     
     // グローバル時間軸上でのこのファイルの開始時刻
     const globalStartTime = globalStartTimes[index];
@@ -337,16 +346,20 @@ const playAll = () => {
     // 現在のグローバル時刻から、このファイルのローカル時刻を計算
     const localTime = currentTime.value - globalStartTime;
     
+    console.log(`File ${index}: volume=${file.volume}, muted=${file.muted}, localTime=${localTime.toFixed(2)}`);
+    
     // ファイルがまだ開始していない場合は再生しない
     if (localTime < 0) {
       audio.pause();
       audio.currentTime = 0;
+      console.log(`File ${index}: Not started yet (localTime=${localTime})`);
       return;
     }
     
     // ファイルが終了している場合は再生しない
     if (localTime >= audio.duration) {
       audio.pause();
+      console.log(`File ${index}: Already ended (localTime=${localTime}, duration=${audio.duration})`);
       return;
     }
     
@@ -355,13 +368,19 @@ const playAll = () => {
     audio.volume = file.volume;
     audio.muted = file.muted;
     audio.playbackRate = parseFloat(playbackRate.value);
-    audio.play();
+    
+    // 音声を再生
+    audio.play().then(() => {
+      console.log(`File ${index}: Playing successfully`);
+    }).catch((error) => {
+      console.error(`File ${index}: Failed to play:`, error);
+    });
   });
   isPlaying.value = true;
 };
 
 const pauseAll = () => {
-  audioRefs.value.forEach(audio => {
+  audioRefs.value.forEach((audio) => {
     if (audio) audio.pause();
   });
   isPlaying.value = false;
@@ -374,9 +393,9 @@ const seek = (event: Event) => {
   // 各ファイルのグローバル開始時刻を取得
   const globalStartTimes = getGlobalStartTimes();
   
-  audioRefs.value.forEach((audio, index) => {
+  props.audioFiles.forEach((file, index) => {
+    const audio = audioRefs.value.get(index);
     if (!audio) return;
-    const file = props.audioFiles[index];
     
     // グローバル時間軸上でのこのファイルの開始時刻
     const globalStartTime = globalStartTimes[index];
@@ -400,20 +419,20 @@ const seekBackward = () => {
 };
 
 const updatePlaybackRate = () => {
-  audioRefs.value.forEach(audio => {
+  audioRefs.value.forEach((audio) => {
     if (audio) audio.playbackRate = parseFloat(playbackRate.value);
   });
 };
 
 const handleTimeUpdate = () => {
-  if (audioRefs.value.length === 0) return;
+  if (audioRefs.value.size === 0) return;
   
   // 各ファイルのグローバル開始時刻を取得
   const globalStartTimes = getGlobalStartTimes();
   
   // 現在再生中のファイルを探す
-  for (let i = 0; i < audioRefs.value.length; i++) {
-    const audio = audioRefs.value[i];
+  for (let i = 0; i < props.audioFiles.length; i++) {
+    const audio = audioRefs.value.get(i);
     if (audio && !audio.paused) {
       const file = props.audioFiles[i];
       const globalStartTime = globalStartTimes[i];
@@ -785,7 +804,7 @@ const recreateWaveform = async (file: AudioFile, waveColor: string = '#4CAF50', 
     
     // 現在の再生位置を反映
     const audioIndex = props.audioFiles.indexOf(file);
-    const audio = audioRefs.value[audioIndex];
+    const audio = audioRefs.value.get(audioIndex);
     if (audio) {
       const progress = audio.currentTime / audio.duration;
       if (!isNaN(progress)) {
@@ -988,6 +1007,16 @@ onUnmounted(() => {
   });
   waveforms.value.clear();
 });
+
+// audio要素のrefを設定するヘルパー関数
+const setAudioRef = (index: number, el: HTMLAudioElement | null) => {
+  if (el) {
+    audioRefs.value.set(index, el);
+    console.log(`Audio ref set for index ${index}`);
+  } else {
+    audioRefs.value.delete(index);
+  }
+};
 
 defineExpose({
   seekToTime
